@@ -4,10 +4,12 @@ Usage:
         [-e=<val> | --environment=<val>]
         [-d | --debug]
         [-l | --all-logs]
+        [-t | --tabular-output]
     wampcli call <command>
         [-e=<val> | --environment=<val>]
         [-d | --debug]
         [-l | --all-logs]
+        [-t | --tabular-output]
     wampcli pub <command>
         [-e=<val> | --environment=<val>]
         [-d | --debug]
@@ -28,6 +30,12 @@ Options:
                     Log everything about the wamp communication down to the
                     packets being exchanged. It essentially sets the log level
                     to 1 (i.e. logs everything) and prints the logs to stdout
+    -t, --tabular-output
+                    Tries to output the result from a call as a table. This
+                    only works if the call result is a list of dictionaries
+                    and all the dictionaries in the list have the same keys.
+                    By default: Outputs the result as raw python like output.
+                    This is mainly relevant for `call` commands
 
 Config File:
     In order to communicate with Zerp, copy the following 
@@ -60,6 +68,7 @@ from izaber import initialize
 from . import zerp
 from . import wamp
 from .controller import METHOD_SHORTHANDS
+from tabulate import tabulate
 
 from cmd import Cmd
 import sys
@@ -71,6 +80,10 @@ from pprint import pprint
 from datetime import datetime
 import traceback
 import logging
+
+# CONSTANTS ---------------------------------------------------------------------------------------
+
+TABLE_VIEW_FORMAT = 'psql'
 
 # REPL --------------------------------------------------------------------------------------------
 
@@ -217,6 +230,46 @@ class replPrompt(Cmd):
             # Reset the uri_base no matter what happens
             wamp.wamp.uri_base = uri_base_bkp
 
+    def data_is_table_printable(self, data):
+        # Data is pretty printable if it is a list of dicts and the dicts all have the same
+        # keys
+        if type(data) is list:
+            if not data:
+                return False
+
+            # Get the keys of the first dict. Each dict in the list should have these
+            # same keys
+            required_keys = {}
+            if type(data[0]) is dict:
+                required_keys = data[0].keys()
+            else:
+                return False
+
+            # Check that all items in the list have the required keys only
+            for item in data:
+                if type(item) is not dict:
+                    return False
+                elif item.keys() != required_keys:
+                    return False
+
+            # If we survived all the checks above then this data object is table printable
+            return True
+        return False
+
+    def print_tabular_data(self, data):
+        # We can assume that the data is a list of dicts. All the dicts have the same keys
+        data_to_print = []
+
+        data_keys = data[0].keys()
+        data_keys.insert(0, data_keys.pop(data_keys.index('id')))
+
+        for item in data:
+            data_to_print.append([
+                item[key]
+                for key in data_keys
+            ])
+
+        print(tabulate(data_to_print, data_keys, tablefmt=TABLE_VIEW_FORMAT))
 
     # CALLBACKS -------------------------------------------
 
@@ -255,12 +308,20 @@ class replPrompt(Cmd):
         try:
             uri, params = self.parse_args(args)
             result = eval("self.call_uri(\'{}\', {})".format(uri, params))
-            pprint(result)
+
+            if global_args['--tabular-output']:
+                if not self.data_is_table_printable(result):
+                    pprint(result)
+                else:
+                    self.print_tabular_data(result)
+            else:
+                pprint(result)
         except Exception as e:
             if global_args['--debug']:
                 traceback.print_exc()
             else:
                 print('Error:', e)
+                raise
 
     def do_pub(self, args):
         """
